@@ -45,7 +45,8 @@ import java.util.Locale
 import kotlin.concurrent.thread
 
 class JarvisService : Service() {
-    companion object { @Volatile var running = false }
+    companion object { @Volatile var running = false
+        @Volatile var uiVisible = false }
 
     private val main = Handler(Looper.getMainLooper())
     private var rec: SpeechRecognizer? = null
@@ -104,6 +105,14 @@ class JarvisService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (i?.action == "PAUSE") {
+            try { rec?.cancel() } catch (e: Exception) {}
+            return START_NOT_STICKY
+        }
+        if (i?.action == "RESUME") {
+            if (wakeMode) main.post { listen() }
+            return START_NOT_STICKY
+        }
         fg("Listo, " + addr())
         main.post { showBubble() }
         if (i?.action == "TALK") {
@@ -117,7 +126,7 @@ class JarvisService : Service() {
     }
 
     private fun listen() {
-        if (speaking || busy) return
+        if (speaking || busy || uiVisible) return
         try {
             rec?.destroy()
             if (!SpeechRecognizer.isRecognitionAvailable(this)) {

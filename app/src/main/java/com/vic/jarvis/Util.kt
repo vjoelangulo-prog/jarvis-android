@@ -80,6 +80,21 @@ object Util {
         prefs(c).edit().putString("rem", keep.toString()).apply()
     }
 
+    fun cancelAlarm(c: Context, id: Int) {
+        val am = c.getSystemService(AlarmManager::class.java)
+        val pi = PendingIntent.getBroadcast(c, id, Intent(c, ReminderReceiver::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        am.cancel(pi)
+    }
+
+    fun rescheduleWeb(c: Context) {
+        val a = JSONArray(prefs(c).getString("remweb", "[]"))
+        val now = System.currentTimeMillis()
+        for (k in 0 until a.length()) {
+            val o = a.getJSONObject(k)
+            if (o.getLong("at") > now) setAlarm(c, o.getInt("id"), o.getString("t"), o.getLong("at"))
+        }
+    }
+
     fun post(key: String, model: String, body: String): String? {
         return try {
             val c = URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent").openConnection() as HttpURLConnection

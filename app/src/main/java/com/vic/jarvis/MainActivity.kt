@@ -58,6 +58,11 @@ class MainActivity : Activity() {
             finish()
             return
         }
+        if (!intent.getBooleanExtra("native", false) && !intent.getBooleanExtra("quick", false)) {
+            startActivity(Intent(this, WebActivity::class.java))
+            finish()
+            return
+        }
         val p = Util.prefs(this)
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL

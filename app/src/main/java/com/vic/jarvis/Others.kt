@@ -45,5 +45,6 @@ class ReminderReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         Util.rescheduleAll(c)
+        Util.rescheduleWeb(c)
     }
 }
