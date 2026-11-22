@@ -21,7 +21,7 @@ class MainActivity : Activity() {
     private fun hasMic() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun ask() {
-        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO, "android.permission.POST_NOTIFICATIONS"), 7)
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO, "android.permission.POST_NOTIFICATIONS", Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE), 7)
     }
 
     private fun toggle() {
@@ -122,8 +122,14 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Apaga y vuelve a activar Jarvis para aplicar", Toast.LENGTH_SHORT).show()
         }
         root.addView(sw)
+        val sb = Switch(this)
+        sb.text = "Burbuja flotante (tocar para hablar)"
+        sb.setTextColor(Color.WHITE)
+        sb.isChecked = p.getBoolean("bubble", true)
+        sb.setOnCheckedChangeListener { _, on -> p.edit().putBoolean("bubble", on).apply() }
+        root.addView(sb)
         root.addView(tv("PERMISOS", 12f, "#5b7a99"))
-        root.addView(btn("1. MICRÓFONO Y NOTIFICACIONES") { ask() })
+        root.addView(btn("1. PERMISOS: MICRÓFONO, CONTACTOS, LLAMADAS") { ask() })
         root.addView(btn("2. PERMITIR ABRIR APPS") {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
         })
