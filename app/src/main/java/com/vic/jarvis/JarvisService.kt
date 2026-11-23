@@ -58,6 +58,8 @@ class JarvisService : Service() {
     private var awaiting = false
     private var gen = 0
     private var pending: Pair<String, () -> Unit>? = null
+    private var pendingFn: ((String) -> Boolean)? = null
+    private var lastContact: Pair<String, String>? = null
     private var bubble: TextView? = null
     private var bubbleBg: GradientDrawable? = null
     private val hist = ArrayList<Pair<String, String>>()
@@ -163,6 +165,16 @@ class JarvisService : Service() {
 
     private fun handle(t0: String) {
         val t = t0.trim()
+        pendingFn?.let { f ->
+            if (t.isEmpty()) {
+                listen()
+                return
+            }
+            pendingFn = null
+            awaiting = false
+            if (!f(t)) speak("Cancelado, " + addr() + ".")
+            return
+        }
         pending?.let { p ->
             pending = null
             awaiting = false
@@ -206,7 +218,7 @@ class JarvisService : Service() {
                 } else {
                     val now = SimpleDateFormat("EEEE d 'de' MMMM yyyy, HH:mm", Locale("es", "ES")).format(Date())
                     val facts = Util.facts(this).joinToString("; ")
-                    val sys = """Eres J.A.R.V.I.S., el mayordomo de inteligencia artificial de Tony Stark: educado, eficiente, con ingenio sutil. Llama al usuario "${addr()}". Responde en español, máximo dos frases, sin listas ni símbolos. Si recibes una orden confirma con "Sí, ${addr()}" o "Enseguida". Fecha y hora actual: $now. Lo que sabes del usuario: $facts. Responde SOLO un JSON: {"say":"lo que dirás en voz alta","remember":"dato personal nuevo y permanente del usuario, o vacío","action":{"type":"none|reminder|open_app|youtube|maps|alarm|timer|call|whatsapp|event","text":"texto del recordatorio","at":"YYYY-MM-DDTHH:MM:SS en hora local","app":"nombre de la app","q":"búsqueda o destino","seconds":0,"name":"nombre del contacto","message":"texto del mensaje en primera persona","minutes":60}}. Usa call para llamar a un contacto, whatsapp para escribir por WhatsApp (con name y message), event para agendar en el calendario (text es el título y at la fecha). Usa reminder para recuérdame, alarm para despertadores y timer para temporizadores."""
+                    val sys = Prompt.system(this, addr())
                     val raw = Util.ask(this, sys, hist.takeLast(10), text)
                     if (raw == null) {
                         say = "No pude conectar con ninguna inteligencia, " + addr() + ". Revise sus claves o su internet."
@@ -241,6 +253,16 @@ class JarvisService : Service() {
         if (a == null) return say
         try {
             when (a.optString("type")) {
+                "call", "whatsapp" -> return contactAction(a)
+                "event" -> return eventAction(a, say)
+                "task_add" -> {
+                    Agenda.addTask(this, a.optString("text"), parse(a.optString("at")))
+                    return if (say.isBlank()) "Anotado, " + addr() + "." else say
+                }
+                "task_list" -> return Agenda.pendingText(this, addr())
+                "task_done" -> return if (Agenda.done(this, a.optString("text"))) (if (say.isBlank()) "Hecho, " + addr() + "." else say) else "No encontré ese pendiente, " + addr() + "."
+                "task_remove" -> return if (Agenda.remove(this, a.optString("text"))) (if (say.isBlank()) "Eliminado, " + addr() + "." else say) else "No encontré ese pendiente, " + addr() + "."
+                "agenda" -> return Agenda.dayText(this, parse(a.optString("at")) ?: System.currentTimeMillis(), addr())
                 "reminder" -> {
                     val at = parse(a.optString("at"))
                     if (at != null && at > System.currentTimeMillis()) Util.scheduleReminder(this, a.optString("text").ifBlank { "Recordatorio" }, at)
@@ -261,14 +283,14 @@ class JarvisService : Service() {
                         launch(Intent(AlarmClock.ACTION_SET_ALARM).putExtra(AlarmClock.EXTRA_HOUR, cal.get(Calendar.HOUR_OF_DAY)).putExtra(AlarmClock.EXTRA_MINUTES, cal.get(Calendar.MINUTE)).putExtra(AlarmClock.EXTRA_MESSAGE, a.optString("text")).putExtra(AlarmClock.EXTRA_SKIP_UI, true), "la alarma")
                     }
                 }
-                "call" -> {
+                "call_old" -> {
                     val c = findContact(a.optString("name"))
                     if (c == null) return "No encontré a " + a.optString("name") + " en sus contactos, " + addr() + ". Revise el permiso de contactos."
                     pending = Pair(c.first, { dial(c.second) })
                     awaiting = true
                     return "¿Llamo a " + c.first + ", " + addr() + "?"
                 }
-                "whatsapp" -> {
+                "whatsapp_old" -> {
                     val c = findContact(a.optString("name"))
                     val m = a.optString("message")
                     if (c == null) return "No encontré a " + a.optString("name") + " en sus contactos, " + addr() + ". Revise el permiso de contactos."
@@ -277,7 +299,7 @@ class JarvisService : Service() {
                     awaiting = true
                     return "Voy a escribirle a " + c.first + ": " + m + ". ¿Lo abro?"
                 }
-                "event" -> {
+                "event_old" -> {
                     val at = parse(a.optString("at"))
                     if (at != null) {
                         val dur = a.optInt("minutes", 60).coerceIn(5, 600) * 60000L
@@ -435,6 +457,132 @@ class JarvisService : Service() {
         var d = num.replace(Regex("[^0-9+]"), "")
         d = if (d.startsWith("+")) d.drop(1) else d.trimStart('0').let { if (it.length <= 10) (Util.prefs(this).getString("cc", "51") ?: "51") + it else it }
         launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + d + "?text=" + Uri.encode(msg))).setPackage("com.whatsapp"), "WhatsApp")
+    }
+
+    private fun hasContacts() = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+
+    private fun findContacts(name: String): List<Pair<String, String>> {
+        if (!hasContacts()) return emptyList()
+        val words = norm(name.replace(Regex("(?i)^(mi|mis|el|la|a)\\s+"), "")).split(" ").filter { it.isNotEmpty() }
+        if (words.isEmpty()) return emptyList()
+        val found = LinkedHashMap<String, Pair<Int, Pair<String, String>>>()
+        val cur = contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
+            null, null, null
+        ) ?: return emptyList()
+        cur.use {
+            while (it.moveToNext()) {
+                val n = it.getString(0) ?: continue
+                val num = it.getString(1) ?: continue
+                val nn = norm(n)
+                if (words.all { w -> nn.contains(w) } && !found.containsKey(nn)) {
+                    val score = if (nn == words.joinToString(" ")) 100 else 50 - nn.length
+                    found[nn] = Pair(score, Pair(n, num))
+                }
+            }
+        }
+        val sorted = found.values.sortedByDescending { it.first }
+        if (sorted.isNotEmpty() && sorted[0].first == 100) return listOf(sorted[0].second)
+        return sorted.map { it.second }
+    }
+
+    private fun contactAction(a: JSONObject): String {
+        val isCall = a.optString("type") == "call"
+        var name = a.optString("name").trim()
+        if (name.isEmpty() || Regex("(?i)^(el|ella|lo|la|le|ese|esa)$").matches(name)) name = lastContact?.first ?: ""
+        if (name.isEmpty()) return "¿A quién, " + addr() + "?"
+        val found = findContacts(name)
+        if (found.isEmpty()) return "No encontré a " + name + " en sus contactos, " + addr() + "." + (if (!hasContacts()) " Falta el permiso de contactos." else "")
+        if (found.size > 1) {
+            val opts = found.take(3)
+            awaiting = true
+            pendingFn = { ans ->
+                val n = norm(ans)
+                val pick: Pair<String, String>? = opts.firstOrNull { o -> norm(o.first).split(" ").any { w -> w.length > 2 && n.contains(w) } }
+                    ?: (if (n.contains("primer") || n.contains("uno")) opts[0] else if (n.contains("segund") || n.contains("dos")) opts.getOrNull(1) else null)
+                if (pick != null) {
+                    speak(runContact(isCall, pick, a))
+                    true
+                } else {
+                    false
+                }
+            }
+            return "Tengo varios, " + addr() + ": " + opts.joinToString(" o ") { it.first } + ". ¿A cuál?"
+        }
+        return runContact(isCall, found[0], a)
+    }
+
+    private fun runContact(isCall: Boolean, c: Pair<String, String>, a: JSONObject): String {
+        lastContact = c
+        Util.prefs(this).edit().putString("lastContact", c.first).apply()
+        if (isCall) {
+            if (Util.prefs(this).getBoolean("confirm_call", false)) {
+                awaiting = true
+                pending = Pair(c.first, { dial(c.second) })
+                return "¿Llamo a " + c.first + ", " + addr() + "?"
+            }
+            dial(c.second)
+            return "Llamando a " + c.first + ", " + addr() + "."
+        }
+        val msg = a.optString("message").trim()
+        if (msg.isEmpty()) {
+            awaiting = true
+            pendingFn = { ans ->
+                speak(sendWa(c, ans.trim(), a))
+                true
+            }
+            return "¿Qué le digo a " + c.first + ", " + addr() + "?"
+        }
+        return sendWa(c, msg, a)
+    }
+
+    private fun waPackages(): List<String> = listOf("com.whatsapp", "com.whatsapp.w4b").filter {
+        try {
+            packageManager.getPackageInfo(it, 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun sendWa(c: Pair<String, String>, msg: String, a: JSONObject): String {
+        val pk = waPackages()
+        if (pk.isEmpty()) return "No encontré WhatsApp instalado, " + addr() + "."
+        val v = norm(a.optString("wa"))
+        val pref: String? = if (v.contains("empres") || v.contains("busin") || v.contains("negoc")) "com.whatsapp.w4b" else if (v.contains("normal") || v.contains("person")) "com.whatsapp" else null
+        val pkg: String? = if (pref != null && pk.contains(pref)) pref else if (pk.size == 1) pk[0] else null
+        if (pkg == null) {
+            awaiting = true
+            pendingFn = { ans ->
+                val n = norm(ans)
+                val chosen: String? = if (n.contains("empres") || n.contains("busin") || n.contains("negoc")) "com.whatsapp.w4b" else if (n.contains("normal") || n.contains("person") || n.contains("comun") || n.contains("verde")) "com.whatsapp" else null
+                if (chosen != null) {
+                    speak(openWaPkg(c, msg, chosen))
+                    true
+                } else {
+                    false
+                }
+            }
+            return "Tiene dos WhatsApp, " + addr() + ". ¿El normal o el de empresa?"
+        }
+        return openWaPkg(c, msg, pkg)
+    }
+
+    private fun openWaPkg(c: Pair<String, String>, msg: String, pkg: String): String {
+        var d = c.second.replace(Regex("[^0-9+]"), "")
+        d = if (d.startsWith("+")) d.drop(1) else d.trimStart('0').let { if (it.length <= 10) (Util.prefs(this).getString("cc", "51") ?: "51") + it else it }
+        launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + d + "?text=" + Uri.encode(msg))).setPackage(pkg), "WhatsApp")
+        return "Abrí WhatsApp con el mensaje para " + c.first + ". Solo falta tocar enviar, " + addr() + "."
+    }
+
+    private fun eventAction(a: JSONObject, say: String): String {
+        val at = parse(a.optString("at")) ?: return "No entendí la fecha del evento, " + addr() + "."
+        val dur = a.optInt("minutes", 60).coerceIn(5, 600) * 60000L
+        val title = a.optString("text").ifBlank { "Evento" }
+        if (Agenda.insertEvent(this, title, at, at + dur)) return (if (say.isBlank()) "Listo." else say) + " Quedó guardado en su calendario."
+        launch(Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI).putExtra(CalendarContract.Events.TITLE, title).putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, at).putExtra(CalendarContract.EXTRA_EVENT_END_TIME, at + dur), "el calendario")
+        return say
     }
 
     private fun stopSpeaking() {
