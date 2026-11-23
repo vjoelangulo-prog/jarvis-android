@@ -46,7 +46,8 @@ import kotlin.concurrent.thread
 
 class JarvisService : Service() {
     companion object { @Volatile var running = false
-        @Volatile var uiVisible = false }
+        @Volatile var uiVisible = false
+        @Volatile var screenOn = false }
 
     private val main = Handler(Looper.getMainLooper())
     private var rec: SpeechRecognizer? = null
@@ -219,7 +220,7 @@ class JarvisService : Service() {
                     val now = SimpleDateFormat("EEEE d 'de' MMMM yyyy, HH:mm", Locale("es", "ES")).format(Date())
                     val facts = Util.facts(this).joinToString("; ")
                     val sys = Prompt.system(this, addr())
-                    val raw = Util.ask(this, sys, hist.takeLast(10), text)
+                    val raw = Util.ask(this, sys, hist.takeLast(10), text + screenCtx())
                     if (raw == null) {
                         say = "No pude conectar con ninguna inteligencia, " + addr() + ". Revise sus claves o su internet."
                     } else {
@@ -253,6 +254,8 @@ class JarvisService : Service() {
         if (a == null) return say
         try {
             when (a.optString("type")) {
+                "screen_on" -> return screenSwitch(true)
+                "screen_off" -> return screenSwitch(false)
                 "call", "whatsapp" -> return contactAction(a)
                 "event" -> return eventAction(a, say)
                 "task_add" -> {
@@ -413,6 +416,7 @@ class JarvisService : Service() {
         }
         main.post {
             bubbleBg?.setStroke((3 * resources.displayMetrics.density).toInt(), Color.parseColor(c))
+            bubble?.text = if (screenOn) "👁" else "J"
             bubble?.invalidate()
         }
     }
@@ -573,6 +577,10 @@ class JarvisService : Service() {
         var d = c.second.replace(Regex("[^0-9+]"), "")
         d = if (d.startsWith("+")) d.drop(1) else d.trimStart('0').let { if (it.length <= 10) (Util.prefs(this).getString("cc", "51") ?: "51") + it else it }
         launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + d + "?text=" + Uri.encode(msg))).setPackage(pkg), "WhatsApp")
+        if (Util.prefs(this).getBoolean("auto_send", false) && JarvisAccess.enabled(this)) {
+            JarvisAccess.instance?.autoSend(pkg)
+            return "Enviando el mensaje a " + c.first + ", " + addr() + "."
+        }
         return "Abrí WhatsApp con el mensaje para " + c.first + ". Solo falta tocar enviar, " + addr() + "."
     }
 
@@ -583,6 +591,28 @@ class JarvisService : Service() {
         if (Agenda.insertEvent(this, title, at, at + dur)) return (if (say.isBlank()) "Listo." else say) + " Quedó guardado en su calendario."
         launch(Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI).putExtra(CalendarContract.Events.TITLE, title).putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, at).putExtra(CalendarContract.EXTRA_EVENT_END_TIME, at + dur), "el calendario")
         return say
+    }
+
+    private fun screenSwitch(on: Boolean): String {
+        if (!on) {
+            screenOn = false
+            update("Listo, " + addr())
+            return "Dejé de ver su pantalla, " + addr() + "."
+        }
+        if (!JarvisAccess.enabled(this)) {
+            launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), "los ajustes de accesibilidad")
+            return "Necesito el permiso de Accesibilidad, " + addr() + ". Active Jarvis en esa lista y vuelva a pedírmelo."
+        }
+        screenOn = true
+        update("Listo, " + addr())
+        return "Ahora veo su pantalla, " + addr() + ". Dígame qué necesita."
+    }
+
+    private fun screenCtx(): String {
+        if (!screenOn) return ""
+        val s = JarvisAccess.instance?.snapshot() ?: return ""
+        if (s.isBlank()) return ""
+        return "\n\n[PANTALLA ACTUAL, texto visible con su posición]\n" + s
     }
 
     private fun stopSpeaking() {
@@ -653,6 +683,7 @@ class JarvisService : Service() {
     }
 
     override fun onDestroy() {
+        screenOn = false
         running = false
         gen++
         hideBubble()

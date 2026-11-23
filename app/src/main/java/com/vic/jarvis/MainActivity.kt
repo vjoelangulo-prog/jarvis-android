@@ -185,12 +185,25 @@ class MainActivity : Activity() {
         permRow(root, "Mostrar sobre otras apps", { Settings.canDrawOverlays(this) }, overlay, overlay)
         val battery = { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + packageName))) }
         permRow(root, "Batería sin restricciones", { getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) }, battery, battery)
+        val accSet = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        permRow(root, "Accesibilidad de Jarvis", { JarvisAccess.enabled(this) }, accSet, accSet)
+        fun screenOnReq() {
+            if (JarvisAccess.enabled(this)) {
+                JarvisService.screenOn = true
+            } else {
+                Toast.makeText(this, "Primero activa Jarvis en Accesibilidad", Toast.LENGTH_LONG).show()
+                accSet()
+            }
+        }
+        permRow(root, "Ver mi pantalla en vivo", { JarvisService.screenOn && JarvisAccess.enabled(this) }, { screenOnReq() }, { JarvisService.screenOn = false })
         root.addView(tv("Al tocar un interruptor, Android pide el permiso. Cuando lo aceptes, el interruptor se enciende solo. Si quedó apagado, el permiso no se concedió.", 12f, "#8fa6bf"))
 
         root.addView(section("FUNCIONES"))
         feature("Burbuja flotante", "bubble", true, "Se aplica al reiniciar Jarvis")
         feature("Escuchar «Jarvis» siempre (gasta batería)", "wake", false, "Apaga y enciende Jarvis para aplicar")
         feature("Confirmar antes de llamar", "confirm_call", false, null)
+        feature("Activar con subir + bajar volumen", "vol_combo", true, null)
+        feature("Enviar WhatsApp sin tocar (Accesibilidad)", "auto_send", false, null)
 
         root.addView(section("MI AGENDA"))
         root.addView(btn("VER PENDIENTES Y AGENDA DE HOY") {

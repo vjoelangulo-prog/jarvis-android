@@ -1,0 +1,3 @@
+<resources>
+    <string name="accessibility_desc">Jarvis usa Accesibilidad para: (1) activarse con subir y bajar volumen a la vez, (2) leer el texto visible de la pantalla SOLO cuando tú le pides que vea tu pantalla, para guiarte, y (3) tocar Enviar en WhatsApp si activaste esa opción. No lee contraseñas, no guarda la pantalla y no usa capturas.</string>
+</resources>
