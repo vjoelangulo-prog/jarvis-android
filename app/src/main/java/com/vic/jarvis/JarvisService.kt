@@ -123,9 +123,29 @@ class JarvisService : Service() {
             main.post { listen() }
         } else {
             wakeMode = Util.prefs(this).getBoolean("wake", false)
+            main.removeCallbacks(watchdog)
+            if (wakeMode) main.postDelayed(watchdog, 10000L)
             if (wakeMode) main.post { listen() }
         }
         return START_NOT_STICKY
+    }
+
+    private var lastEvent = 0L
+    private var errCount = 0
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (wakeMode && !speaking && !busy && !uiVisible && SystemClock.elapsedRealtime() - lastEvent > 20000L) listen()
+            main.postDelayed(this, 10000L)
+        }
+    }
+
+    private fun errName(e: Int): String? = when (e) {
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Error: falta el permiso del micrófono"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Error: micrófono ocupado"
+        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Error: sin internet para la voz"
+        SpeechRecognizer.ERROR_SERVER -> "Error: el reconocedor de Google falló"
+        SpeechRecognizer.ERROR_AUDIO -> "Error: no pude abrir el micrófono"
+        else -> null
     }
 
     private fun listen() {
@@ -133,20 +153,35 @@ class JarvisService : Service() {
         try {
             rec?.destroy()
             if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                speak("El reconocimiento de voz no está disponible en este teléfono.")
+                update("Error: este teléfono no tiene reconocimiento de voz")
                 return
             }
             val r = SpeechRecognizer.createSpeechRecognizer(this)
             rec = r
+            lastEvent = SystemClock.elapsedRealtime()
             r.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(res: Bundle?) {
+                    lastEvent = SystemClock.elapsedRealtime()
+                    errCount = 0
                     handle(res?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: "")
                 }
                 override fun onError(e: Int) {
-                    if (wakeMode && !busy && !speaking) main.postDelayed({ listen() }, if (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1500L else 400L)
-                    else update("Listo, " + addr())
+                    lastEvent = SystemClock.elapsedRealtime()
+                    val quiet = e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    if (quiet) errCount = 0 else errCount++
+                    if (busy || speaking) return
+                    if (!wakeMode) {
+                        update(errName(e) ?: ("Listo, " + addr()))
+                        return
+                    }
+                    errName(e)?.let { update(it) }
+                    val d = if (quiet) 250L else minOf(1200L * errCount, 8000L)
+                    main.postDelayed({ if (wakeMode && !busy && !speaking) listen() }, d)
                 }
-                override fun onReadyForSpeech(p: Bundle?) { update(if (awaiting) "Dígame, " + addr() else "Escuchando…") }
+                override fun onReadyForSpeech(p: Bundle?) {
+                    lastEvent = SystemClock.elapsedRealtime()
+                    update(if (awaiting) "Dígame, " + addr() else if (wakeMode) "Escuchando: di «Jarvis» y tu orden" else "Escuchando…")
+                }
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(v: Float) {}
                 override fun onBufferReceived(b: ByteArray?) {}
@@ -157,6 +192,7 @@ class JarvisService : Service() {
             val ri = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
+                .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
             r.startListening(ri)
         } catch (e: Exception) {
@@ -615,10 +651,41 @@ class JarvisService : Service() {
         return "\n\n[PANTALLA ACTUAL, texto visible con su posición]\n" + s
     }
 
+    @Volatile private var track: AudioTrack? = null
+    private var focusReq: android.media.AudioFocusRequest? = null
+    private var voiceWarned = false
+
+    private fun requestFocus() {
+        try {
+            val am = getSystemService(android.media.AudioManager::class.java)
+            val r = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .build()
+            focusReq = r
+            am.requestAudioFocus(r)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun abandonFocus() {
+        try {
+            val r = focusReq
+            if (r != null) getSystemService(android.media.AudioManager::class.java).abandonAudioFocusRequest(r)
+        } catch (e: Exception) {
+        }
+        focusReq = null
+    }
+
     private fun stopSpeaking() {
         gen++
         speaking = false
-        tts?.stop()
+        try { tts?.stop() } catch (e: Exception) {}
+        try {
+            track?.pause()
+            track?.flush()
+        } catch (e: Exception) {
+        }
+        abandonFocus()
     }
 
     private fun speak(text: String, then: (() -> Unit)? = null) {
@@ -626,63 +693,179 @@ class JarvisService : Service() {
         val my = gen
         speaking = true
         update(text.take(90))
+        state = "speaking"
+        val clean = text.replace(Regex("[*_#`~>|]"), " ").replace(Regex("\\s+"), " ").trim()
         thread {
             var ok = false
             try {
-                val clean = text.replace(Regex("[*_#`~>|]"), " ").take(700)
-                val voice = Util.prefs(this).getString("voice", "Charon") ?: "Charon"
-                val body = JSONObject()
-                    .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Di en español, con voz natural, fluida y serena: " + clean)))))
-                    .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("AUDIO")).put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
-                    .toString()
-                val raw = Util.gemini(this, body, listOf("gemini-3.1-flash-tts-preview"))
-                if (raw != null && my == gen) {
-                    val d = JSONObject(raw).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getJSONObject("inlineData").getString("data")
-                    playPcm(Base64.decode(d, Base64.DEFAULT), my)
-                    ok = true
-                }
+                ok = streamNatural(clean, my)
             } catch (e: Exception) {
+                ok = false
             }
-            if (my == gen) main.post { if (ok) finishSpeak(my, then) else deviceSpeak(text, my, then) }
+            if (my == gen) main.post { if (ok) finishSpeak(my, then) else deviceSpeak(clean, my, then) }
         }
     }
 
-    private fun playPcm(pcm: ByteArray, my: Int) {
-        val t = AudioTrack.Builder()
+    private fun splitSpeech(t: String): List<String> {
+        val parts = t.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
+        val out = ArrayList<String>()
+        var cur = StringBuilder()
+        for (p in parts) {
+            val limit = if (out.isEmpty()) 140 else 260
+            if (cur.isNotEmpty() && cur.length + p.length > limit) {
+                out.add(cur.toString().trim())
+                cur = StringBuilder()
+            }
+            if (cur.isNotEmpty()) cur.append(' ')
+            cur.append(p)
+        }
+        if (cur.isNotBlank()) out.add(cur.toString().trim())
+        return out
+    }
+
+    private fun fetchPcm(text: String): ByteArray? {
+        val voice = Util.prefs(this).getString("voice", "Charon") ?: "Charon"
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Di en español, con voz natural, fluida y serena: " + text)))))
+            .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("AUDIO")).put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
+            .toString()
+        for (attempt in 0 until 2) {
+            val raw = Util.gemini(this, body, listOf("gemini-3.1-flash-tts-preview"))
+            if (raw != null) {
+                try {
+                    val d = JSONObject(raw).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getJSONObject("inlineData").getString("data")
+                    return Base64.decode(d, Base64.DEFAULT)
+                } catch (e: Exception) {
+                }
+            }
+        }
+        return null
+    }
+
+    private fun openTrack(): AudioTrack {
+        val min = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        return AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setBufferSizeInBytes(pcm.size).setTransferMode(AudioTrack.MODE_STATIC).build()
-        t.write(pcm, 0, pcm.size)
-        t.play()
-        val frames = pcm.size / 2
-        val t0 = SystemClock.elapsedRealtime()
-        val limit = frames * 1000L / 24000L + 1500L
-        while (my == gen && t.playbackHeadPosition < frames && SystemClock.elapsedRealtime() - t0 < limit) Thread.sleep(40)
-        try { t.stop() } catch (e: Exception) {}
-        t.release()
+            .setBufferSizeInBytes(maxOf(min * 4, 48000))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+    }
+
+    private fun streamNatural(text: String, my: Int): Boolean {
+        val chunks = splitSpeech(text)
+        if (chunks.isEmpty()) return false
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        val futs = arrayOfNulls<java.util.concurrent.Future<ByteArray?>>(chunks.size)
+        fun start(i: Int) {
+            if (i < chunks.size && futs[i] == null) {
+                futs[i] = pool.submit(java.util.concurrent.Callable<ByteArray?> { fetchPcm(chunks[i]) })
+            }
+        }
+        var at: AudioTrack? = null
+        var started = false
+        var frames = 0L
+        try {
+            start(0)
+            start(1)
+            for (i in chunks.indices) {
+                if (my != gen) break
+                val pcm: ByteArray? = try {
+                    futs[i]?.get(18, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: Exception) {
+                    null
+                }
+                start(i + 2)
+                if (my != gen) break
+                if (pcm == null) {
+                    if (!started) return false
+                    break
+                }
+                val tr = at ?: openTrack().also {
+                    at = it
+                    track = it
+                    it.play()
+                    requestFocus()
+                }
+                started = true
+                var off = 0
+                while (off < pcm.size && my == gen) {
+                    val n = tr.write(pcm, off, minOf(pcm.size - off, 4800))
+                    if (n <= 0) break
+                    off += n
+                }
+                frames += (off / 2).toLong()
+            }
+            val t = at
+            if (t != null && my == gen) {
+                val t0 = SystemClock.elapsedRealtime()
+                val limit = frames * 1000L / 24000L + 2500L
+                while (my == gen && t.playbackHeadPosition.toLong() < frames && SystemClock.elapsedRealtime() - t0 < limit) Thread.sleep(30)
+            }
+        } finally {
+            pool.shutdownNow()
+            val t = at
+            try { t?.stop() } catch (e: Exception) {}
+            try { t?.release() } catch (e: Exception) {}
+            if (track === t) track = null
+        }
+        return started
+    }
+
+    private fun noVoice() {
+        if (voiceWarned) return
+        voiceWarned = true
+        try {
+            val i = Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val pi = PendingIntent.getActivity(this, 91, i, PendingIntent.FLAG_IMMUTABLE)
+            val n = Notification.Builder(this, Util.CH_ACT).setSmallIcon(R.drawable.ic_jarvis).setContentTitle("Jarvis no tiene voz").setContentText("Instala la voz en español: toca aquí").setContentIntent(pi).setAutoCancel(true).build()
+            getSystemService(NotificationManager::class.java).notify(91, n)
+        } catch (e: Exception) {
+        }
     }
 
     private fun deviceSpeak(text: String, my: Int, then: (() -> Unit)?) {
-        if (!ttsReady) {
+        val t = tts
+        if (!ttsReady || t == null) {
+            noVoice()
             finishSpeak(my, then)
             return
         }
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+        var ok = false
+        for (l in listOf(Locale("es", "ES"), Locale("es", "MX"), Locale("es", "US"), Locale("es"))) {
+            val r = t.setLanguage(l)
+            if (r == TextToSpeech.LANG_AVAILABLE || r == TextToSpeech.LANG_COUNTRY_AVAILABLE || r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
+                ok = true
+                break
+            }
+        }
+        if (!ok) noVoice()
+        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(u: String?) {}
             override fun onDone(u: String?) { main.post { finishSpeak(my, then) } }
             override fun onError(u: String?) { main.post { finishSpeak(my, then) } }
         })
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "j" + my)
+        requestFocus()
+        val rc = t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "j" + my)
+        if (rc != TextToSpeech.SUCCESS) finishSpeak(my, then)
+        main.postDelayed({ if (my == gen && speaking) finishSpeak(my, then) }, 45000L)
     }
 
     private fun finishSpeak(my: Int, then: (() -> Unit)?) {
         if (my != gen) return
         speaking = false
+        abandonFocus()
         update("Listo, " + addr())
-        if (then != null) then() else if (awaiting || wakeMode) listen()
+        if (then != null) {
+            then()
+        } else if (awaiting || wakeMode) {
+            main.postDelayed({ if (my == gen && !speaking && !busy) listen() }, 350L)
+        }
     }
 
     override fun onDestroy() {
+        abandonFocus()
+        main.removeCallbacks(watchdog)
         screenOn = false
         running = false
         gen++
