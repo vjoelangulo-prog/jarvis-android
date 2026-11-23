@@ -170,12 +170,6 @@ class MainActivity : Activity() {
         fun runtime(vararg x: String): () -> Unit = { requestPermissions(arrayOf(*x), 7) }
 
         root.addView(tv("J.A.R.V.I.S", 30f, "#19d3ff"))
-        val sphere = SphereView(this)
-        sphere.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (260 * resources.displayMetrics.density).toInt())
-        sphere.setOnClickListener {
-            if (!JarvisService.running) toggle() else startService(Intent(this, JarvisService::class.java).setAction("TALK"))
-        }
-        root.addView(sphere)
         val st = tv("", 18f, "#cfe8ff")
         status = st
         root.addView(st)
