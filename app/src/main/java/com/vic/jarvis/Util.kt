@@ -95,6 +95,84 @@ object Util {
         }
     }
 
+    fun extractJson(t: String): String {
+        val a = t.indexOf('{')
+        val b = t.lastIndexOf('}')
+        return if (a >= 0 && b > a) t.substring(a, b + 1) else t
+    }
+
+    private fun httpPost(url: String, headers: Map<String, String>, body: String): String? {
+        return try {
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.connectTimeout = 6000
+            c.readTimeout = 16000
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            for ((k, v) in headers) c.setRequestProperty(k, v)
+            c.outputStream.use { it.write(body.toByteArray()) }
+            val ok = c.responseCode in 200..299
+            val t = (if (ok) c.inputStream else c.errorStream).bufferedReader().use { it.readText() }
+            if (ok) t else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun ask(c: Context, sys: String, hist: List<Pair<String, String>>, user: String): String? {
+        val t0 = System.currentTimeMillis()
+        val left = { 28000L - (System.currentTimeMillis() - t0) }
+        val contents = JSONArray()
+        for (h in hist) contents.put(JSONObject().put("role", h.first).put("parts", JSONArray().put(JSONObject().put("text", h.second))))
+        contents.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", user))))
+        val gb = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sys))))
+            .put("contents", contents)
+            .put("generationConfig", JSONObject().put("responseMimeType", "application/json").put("maxOutputTokens", 500))
+            .toString()
+        for (m in MODELS) {
+            for (k in keys(c)) {
+                if (left() < 0) break
+                val r = post(k, m, gb)
+                if (r != null) {
+                    try {
+                        return JSONObject(r).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+                    } catch (e: Exception) {
+                    }
+                }
+            }
+        }
+        val kc = prefs(c).getString("k_claude", "")!!.trim()
+        if (kc.length > 15 && left() > 0) {
+            val msgs = JSONArray()
+            for (h in hist) msgs.put(JSONObject().put("role", if (h.first == "model") "assistant" else "user").put("content", h.second))
+            msgs.put(JSONObject().put("role", "user").put("content", user))
+            val body = JSONObject().put("model", "claude-sonnet-5-5").put("max_tokens", 500).put("system", sys).put("messages", msgs).toString()
+            val r = httpPost("https://api.anthropic.com/v1/messages", mapOf("x-api-key" to kc, "anthropic-version" to "2023-06-01"), body)
+            if (r != null) {
+                try {
+                    return JSONObject(r).getJSONArray("content").getJSONObject(0).getString("text")
+                } catch (e: Exception) {
+                }
+            }
+        }
+        val ko = prefs(c).getString("k_openai", "")!!.trim()
+        if (ko.length > 15 && left() > 0) {
+            val msgs = JSONArray().put(JSONObject().put("role", "system").put("content", sys))
+            for (h in hist) msgs.put(JSONObject().put("role", if (h.first == "model") "assistant" else "user").put("content", h.second))
+            msgs.put(JSONObject().put("role", "user").put("content", user))
+            val body = JSONObject().put("model", "gpt-6.1-terra").put("max_completion_tokens", 1500).put("messages", msgs).toString()
+            val r = httpPost("https://api.openai.com/v1/chat/completions", mapOf("Authorization" to "Bearer " + ko), body)
+            if (r != null) {
+                try {
+                    return JSONObject(r).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+                } catch (e: Exception) {
+                }
+            }
+        }
+        return null
+    }
+
     fun post(key: String, model: String, body: String): String? {
         return try {
             val c = URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent").openConnection() as HttpURLConnection

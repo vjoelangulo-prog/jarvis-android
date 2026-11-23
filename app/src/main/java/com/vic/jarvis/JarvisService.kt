@@ -207,19 +207,11 @@ class JarvisService : Service() {
                     val now = SimpleDateFormat("EEEE d 'de' MMMM yyyy, HH:mm", Locale("es", "ES")).format(Date())
                     val facts = Util.facts(this).joinToString("; ")
                     val sys = """Eres J.A.R.V.I.S., el mayordomo de inteligencia artificial de Tony Stark: educado, eficiente, con ingenio sutil. Llama al usuario "${addr()}". Responde en español, máximo dos frases, sin listas ni símbolos. Si recibes una orden confirma con "Sí, ${addr()}" o "Enseguida". Fecha y hora actual: $now. Lo que sabes del usuario: $facts. Responde SOLO un JSON: {"say":"lo que dirás en voz alta","remember":"dato personal nuevo y permanente del usuario, o vacío","action":{"type":"none|reminder|open_app|youtube|maps|alarm|timer|call|whatsapp|event","text":"texto del recordatorio","at":"YYYY-MM-DDTHH:MM:SS en hora local","app":"nombre de la app","q":"búsqueda o destino","seconds":0,"name":"nombre del contacto","message":"texto del mensaje en primera persona","minutes":60}}. Usa call para llamar a un contacto, whatsapp para escribir por WhatsApp (con name y message), event para agendar en el calendario (text es el título y at la fecha). Usa reminder para recuérdame, alarm para despertadores y timer para temporizadores."""
-                    val contents = JSONArray()
-                    for (h in hist.takeLast(10)) contents.put(JSONObject().put("role", h.first).put("parts", JSONArray().put(JSONObject().put("text", h.second))))
-                    contents.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text))))
-                    val body = JSONObject()
-                        .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sys))))
-                        .put("contents", contents)
-                        .put("generationConfig", JSONObject().put("responseMimeType", "application/json").put("maxOutputTokens", 500))
-                        .toString()
-                    val raw = Util.gemini(this, body)
+                    val raw = Util.ask(this, sys, hist.takeLast(10), text)
                     if (raw == null) {
-                        say = "No pude conectar con Gemini, " + addr() + ". Revise su clave o su internet."
+                        say = "No pude conectar con ninguna inteligencia, " + addr() + ". Revise sus claves o su internet."
                     } else {
-                        val txt = JSONObject(raw).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+                        val txt = Util.extractJson(raw)
                         val j = JSONObject(txt)
                         say = j.optString("say").ifBlank { "Entendido, " + addr() + "." }
                         act = j.optJSONObject("action")
