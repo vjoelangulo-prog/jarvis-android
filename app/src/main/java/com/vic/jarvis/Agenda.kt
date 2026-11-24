@@ -30,6 +30,39 @@ object Agenda {
         save(c, a)
     }
 
+    fun tasksJson(c: Context): String = tasks(c).toString()
+
+    fun doneById(c: Context, id: Long, v: Boolean) {
+        val a = tasks(c)
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.getLong("id") == id) o.put("done", v)
+        }
+        save(c, a)
+    }
+
+    fun removeById(c: Context, id: Long) {
+        val a = tasks(c)
+        val n = JSONArray()
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.getLong("id") != id) n.put(o)
+        }
+        save(c, n)
+    }
+
+    fun remListJson(c: Context): String {
+        val a = JSONArray(Util.prefs(c).getString("rem", "[]"))
+        val now = System.currentTimeMillis()
+        val l = ArrayList<JSONObject>()
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.getLong("at") > now) l.add(o)
+        }
+        l.sortBy { it.getLong("at") }
+        return JSONArray(l).toString()
+    }
+
     fun pending(c: Context): List<JSONObject> {
         val a = tasks(c)
         val out = ArrayList<JSONObject>()

@@ -222,6 +222,49 @@ class NativeBridge(private val act: Activity, private val web: WebView) {
     }
 
     @JavascriptInterface
+    fun agendaGet(): String {
+        return try {
+            JSONObject().put("tasks", JSONArray(Agenda.tasksJson(act))).put("rem", JSONArray(Agenda.remListJson(act))).toString()
+        } catch (e: Exception) {
+            "{}"
+        }
+    }
+
+    @JavascriptInterface
+    fun taskAdd(text: String, due: String): Boolean {
+        if (text.isBlank()) return false
+        val d = due.toLongOrNull() ?: 0L
+        Agenda.addTask(act, text, if (d > 0L) d else null)
+        return true
+    }
+
+    @JavascriptInterface
+    fun taskDone(id: String, v: String) {
+        val i = id.toLongOrNull() ?: return
+        Agenda.doneById(act, i, v == "1")
+    }
+
+    @JavascriptInterface
+    fun taskDel(id: String) {
+        val i = id.toLongOrNull() ?: return
+        Agenda.removeById(act, i)
+    }
+
+    @JavascriptInterface
+    fun remAdd(text: String, at: String): Boolean {
+        val t = at.toLongOrNull() ?: return false
+        if (t <= System.currentTimeMillis() || text.isBlank()) return false
+        Util.scheduleReminder(act, text.trim(), t)
+        return true
+    }
+
+    @JavascriptInterface
+    fun remDel(id: String) {
+        val i = id.toIntOrNull() ?: return
+        Util.removeReminder(act, i)
+    }
+
+    @JavascriptInterface
     fun setBubble(on: Boolean) {
         Util.prefs(act).edit().putBoolean("bubble", on).apply()
     }

@@ -316,12 +316,10 @@ class JarvisService : Service() {
                     if (li != null) launch(li, a.optString("app")) else return "No encontré esa aplicación, " + addr() + "."
                 }
                 "alarm" -> {
-                    val at = parse(a.optString("at"))
-                    if (at != null) {
-                        val cal = Calendar.getInstance()
-                        cal.timeInMillis = at
-                        launch(Intent(AlarmClock.ACTION_SET_ALARM).putExtra(AlarmClock.EXTRA_HOUR, cal.get(Calendar.HOUR_OF_DAY)).putExtra(AlarmClock.EXTRA_MINUTES, cal.get(Calendar.MINUTE)).putExtra(AlarmClock.EXTRA_MESSAGE, a.optString("text")).putExtra(AlarmClock.EXTRA_SKIP_UI, true), "la alarma")
-                    }
+                    var at: Long = parse(a.optString("at")) ?: return "No entendí la hora de la alarma, " + addr() + "."
+                    while (at <= System.currentTimeMillis()) at += 86400000L
+                    Util.scheduleReminder(this, a.optString("text").ifBlank { "Alarma" }, at)
+                    return if (say.isBlank()) "Alarma lista, " + addr() + "." else say
                 }
                 "call_old" -> {
                     val c = findContact(a.optString("name"))

@@ -80,6 +80,17 @@ object Util {
         prefs(c).edit().putString("rem", keep.toString()).apply()
     }
 
+    fun removeReminder(c: Context, id: Int) {
+        val a = JSONArray(prefs(c).getString("rem", "[]"))
+        val n = JSONArray()
+        for (k in 0 until a.length()) {
+            val o = a.getJSONObject(k)
+            if (o.getInt("id") != id) n.put(o)
+        }
+        prefs(c).edit().putString("rem", n.toString()).apply()
+        cancelAlarm(c, id)
+    }
+
     fun cancelAlarm(c: Context, id: Int) {
         val am = c.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(c, id, Intent(c, ReminderReceiver::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
