@@ -152,6 +152,7 @@ class JarvisService : Service() {
     private fun listen() {
         if (speaking || busy || uiVisible) return
         try {
+            thread { try { val u = java.net.URL("https://generativelanguage.googleapis.com/").openConnection() as java.net.HttpURLConnection; u.connectTimeout = 3000; u.readTimeout = 3000; u.responseCode; u.disconnect() } catch (e: Exception) {} }
             rec?.destroy()
             if (!SpeechRecognizer.isRecognitionAvailable(this)) {
                 update("Error: este teléfono no tiene reconocimiento de voz")
@@ -194,7 +195,7 @@ class JarvisService : Service() {
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
                 .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
-                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             r.startListening(ri)
         } catch (e: Exception) {
             update("Error de micrófono")
@@ -710,7 +711,7 @@ class JarvisService : Service() {
         val out = ArrayList<String>()
         var cur = StringBuilder()
         for (p in parts) {
-            val limit = if (out.isEmpty()) 140 else 260
+            val limit = if (out.isEmpty()) 90 else 260
             if (cur.isNotEmpty() && cur.length + p.length > limit) {
                 out.add(cur.toString().trim())
                 cur = StringBuilder()

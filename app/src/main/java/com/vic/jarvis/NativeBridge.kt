@@ -79,7 +79,7 @@ class NativeBridge(private val act: Activity, private val web: WebView) {
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, interim)
-                    .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
+                    .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
                 r.startListening(i)
             } catch (e: Exception) {
                 ev("error", "\"audio-capture\"")
