@@ -46,6 +46,7 @@ import kotlin.concurrent.thread
 
 class JarvisService : Service() {
     companion object { @Volatile var running = false
+        @Volatile var state = "idle"
         @Volatile var uiVisible = false
         @Volatile var screenOn = false }
 
