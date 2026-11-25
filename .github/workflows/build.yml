@@ -21,7 +21,17 @@ jobs:
         with:
           path: ~/.android/debug.keystore
           key: debug-keystore-v1
-      - run: gradle assembleDebug --stacktrace
-      - env:
+      - name: Compilar
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build.log
+      - name: Resumen de errores
+        if: failure()
+        shell: bash
+        run: |
+          grep -E '^e: ' build.log | sed -E 's#file:///home/runner/work/[^/]+/[^/]+/##' | head -10 | while IFS= read -r l; do echo "::error::$l"; done
+      - name: Publicar APK
+        env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "v${{ github.run_number }}" app/build/outputs/apk/debug/app-debug.apk --title "Jarvis ${{ github.run_number }}" --notes "APK de Jarvis"
