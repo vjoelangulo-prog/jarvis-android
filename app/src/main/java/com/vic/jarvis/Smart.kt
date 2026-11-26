@@ -32,15 +32,24 @@ object Smart {
         val contents = JSONArray()
         for (h in hist) contents.put(JSONObject().put("role", h.first).put("parts", JSONArray().put(JSONObject().put("text", h.second))))
         contents.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", user))))
-        val body = JSONObject()
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sys))))
-            .put("contents", contents)
-            .put("generationConfig", JSONObject().put("responseMimeType", "application/json").put("maxOutputTokens", maxT))
-            .toString()
+        fun mk(think: Boolean): String {
+            val g = JSONObject().put("responseMimeType", "application/json").put("maxOutputTokens", maxT)
+            if (think) g.put("thinkingConfig", JSONObject().put("thinkingLevel", if (maxT >= 2000) "medium" else "low"))
+            return JSONObject()
+                .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sys))))
+                .put("contents", contents)
+                .put("generationConfig", g)
+                .toString()
+        }
+        val body = mk(true)
+        val bodyPlain = mk(false)
         for (m in models) {
             for (k in Util.keys(c)) {
                 if (left() <= 0) return null
-                val r = post("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", mapOf("x-goog-api-key" to k), body, to)
+                val u = "https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent"
+                val t0 = System.currentTimeMillis()
+                var r = post(u, mapOf("x-goog-api-key" to k), body, to)
+                if (r == null && System.currentTimeMillis() - t0 < 2500L) r = post(u, mapOf("x-goog-api-key" to k), bodyPlain, to)
                 if (r != null) {
                     try {
                         return JSONObject(r).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
