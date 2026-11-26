@@ -14,6 +14,7 @@ import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.ValueCallback
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -21,6 +22,7 @@ import android.widget.EditText
 class WebActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var bridge: NativeBridge
+    private var fileCb: ValueCallback<Array<Uri>>? = null
     private val home = "https://vjoelangulo-prog.github.io/"
     private val offline = "<body style='background:#04070d;color:#cfe8ff;font-family:sans-serif;padding:30px'><h2>Jarvis sin conexión</h2><p>Revisa tu internet.</p><button style='font-size:20px;padding:14px' onclick=\"location.href='https://vjoelangulo-prog.github.io/'\">REINTENTAR</button><p><a style='color:#19d3ff' href='jarvis://native'>Abrir ajustes nativos</a></p></body>"
 
@@ -56,6 +58,20 @@ class WebActivity : Activity() {
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(w: WebView?, cb: ValueCallback<Array<Uri>>?, p: WebChromeClient.FileChooserParams?): Boolean {
+                fileCb?.onReceiveValue(null)
+                fileCb = cb
+                val i = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                return try {
+                    this@WebActivity.startActivityForResult(Intent.createChooser(i, "Elegir archivos"), 4242)
+                    true
+                } catch (e: Exception) {
+                    fileCb = null
+                    cb?.onReceiveValue(null)
+                    false
+                }
+            }
+
             override fun onPermissionRequest(r: PermissionRequest?) {
                 r?.let { req -> runOnUiThread { req.grant(req.resources) } }
             }
@@ -122,6 +138,25 @@ class WebActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req == 4242) {
+            var r: Array<Uri>? = null
+            if (res == RESULT_OK && data != null) {
+                val cd = data.clipData
+                if (cd != null) {
+                    r = Array(cd.itemCount) { cd.getItemAt(it).uri }
+                } else {
+                    val d = data.data
+                    if (d != null) r = arrayOf(d)
+                }
+            }
+            fileCb?.onReceiveValue(r)
+            fileCb = null
+        }
     }
 
     override fun onDestroy() {
