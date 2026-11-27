@@ -19,7 +19,86 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class NativeBridge(private val act: Activity, private val web: WebView) {
-    private val main = Handler(Looper.getMainLooper())
+    private var ttsE: android.speech.tts.TextToSpeech? = null
+    private var ttsOk = false
+    private var ttsLang = ""
+    private var ttsQ: Array<String>? = null
+    private fun jt(kind: String, id: String) {
+        main.post { web.evaluateJavascript("window.__jtts&&window.__jtts('" + kind + "','" + id + "')", null) }
+    }
+    private fun ttsInit() {
+        if (ttsE != null) return
+        ttsE = android.speech.tts.TextToSpeech(act.applicationContext) { s ->
+            main.post {
+                if (s == android.speech.tts.TextToSpeech.SUCCESS) {
+                    ttsOk = true
+                    val q = ttsQ
+                    ttsQ = null
+                    if (q != null) ttsGo(q[0], q[1], q[2].toFloatOrNull() ?: 1f, q[3])
+                } else {
+                    ttsE = null
+                    val q = ttsQ
+                    ttsQ = null
+                    if (q != null) jt("error", q[3])
+                }
+            }
+        }
+    }
+    private fun ttsGo(text: String, lang: String, rate: Float, id: String) {
+        val t = ttsE
+        if (t == null) {
+            jt("error", id)
+            return
+        }
+        if (ttsLang != lang) {
+            var ok = false
+            val cands = listOf(java.util.Locale.forLanguageTag(lang), java.util.Locale("es", "MX"), java.util.Locale("es", "US"), java.util.Locale("es", "ES"), java.util.Locale("es"))
+            for (l in cands) {
+                val r = t.setLanguage(l)
+                if (r == android.speech.tts.TextToSpeech.LANG_AVAILABLE || r == android.speech.tts.TextToSpeech.LANG_COUNTRY_AVAILABLE || r == android.speech.tts.TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
+                    ok = true
+                    break
+                }
+            }
+            if (!ok) {
+                jt("error", id)
+                return
+            }
+            ttsLang = lang
+        }
+        t.setSpeechRate(if (rate < 0.5f) 0.5f else if (rate > 2.0f) 2.0f else rate)
+        t.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(u: String?) { jt("start", u ?: "") }
+            override fun onDone(u: String?) { jt("end", u ?: "") }
+            override fun onError(u: String?) { jt("error", u ?: "") }
+            override fun onStop(u: String?, interrupted: Boolean) { jt("end", u ?: "") }
+        })
+        val rc = t.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, id)
+        if (rc != android.speech.tts.TextToSpeech.SUCCESS) jt("error", id)
+    }
+    @JavascriptInterface
+    fun warmTts() {
+        main.post { try { ttsInit() } catch (e: Exception) { } }
+    }
+    @JavascriptInterface
+    fun speakNative(text: String, lang: String, rate: Double, id: String) {
+        main.post {
+            try {
+                if (ttsOk) {
+                    ttsGo(text, lang, rate.toFloat(), id)
+                } else {
+                    ttsQ = arrayOf(text, lang, rate.toString(), id)
+                    ttsInit()
+                }
+            } catch (e: Exception) {
+                jt("error", id)
+            }
+        }
+    }
+    @JavascriptInterface
+    fun stopSpeak() {
+        main.post { try { ttsE?.stop() } catch (e: Exception) { } }
+    }    private val main = Handler(Looper.getMainLooper())
     private var rec: SpeechRecognizer? = null
 
     private fun ev(type: String, data: String = "null") {
