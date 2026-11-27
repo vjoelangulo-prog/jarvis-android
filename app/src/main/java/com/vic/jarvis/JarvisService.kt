@@ -61,6 +61,20 @@ class JarvisService : Service() {
     private var gen = 0
     private var pending: Pair<String, () -> Unit>? = null
     private var pendingFn: ((String) -> Boolean)? = null
+    private var lastSaid = ""
+    private var lastSaidEnd = 0L
+    private val TOPIC = Regex("(?i)(\\b(cambiemos|cambiamos|cambiar|cambiando|cambio)\\s+de\\s+tema\\b|\\botro\\s+tema\\b|\\bhablemos\\s+de\\s+otra\\s+cosa\\b|\\bdejemos\\s+(eso|esto|el\\s+tema)\\b|\\bolv[ií]d(a|ate)\\s+(de\\s+)?(eso|esto|lo\\s+anterior|el\\s+tema)\\b|\\bempecemos\\s+de\\s+nuevo\\b|\\bnueva\\s+conversaci[oó]n\\b)")
+
+    private fun wordsOf(t: String): Set<String> = norm(t).split(" ").filter { it.length > 2 }.toSet()
+
+    private fun echo(t: String): Boolean {
+        if (lastSaid.isEmpty() || System.currentTimeMillis() - lastSaidEnd > 15000L) return false
+        val a = wordsOf(t)
+        if (a.size < 3) return false
+        val b = wordsOf(lastSaid)
+        return a.count { b.contains(it) }.toFloat() / a.size >= 0.7f
+    }
+
     private var lastContact: Pair<String, String>? = null
     private var bubble: TextView? = null
     private var bubbleBg: GradientDrawable? = null
@@ -204,6 +218,10 @@ class JarvisService : Service() {
 
     private fun handle(t0: String) {
         val t = t0.trim()
+        if (echo(t)) {
+            if (wakeMode || awaiting) listen() else update("Listo, " + addr())
+            return
+        }
         pendingFn?.let { f ->
             if (t.isEmpty()) {
                 listen()
@@ -245,7 +263,17 @@ class JarvisService : Service() {
         process(t)
     }
 
-    private fun process(text: String) {
+    private fun process(text0: String) {
+        var text = text0
+        if (TOPIC.containsMatchIn(text)) {
+            hist.clear()
+            val rest = text.replace(TOPIC, " ").trim().trim(',', '.', ';', ':', '!', '¡', '?', '¿', ' ').trim()
+            if (rest.length < 4) {
+                speak("Claro, " + addr() + ". Tema nuevo. ¿De qué hablamos?")
+                return
+            }
+            text = rest
+        }
         busy = true
         update("Procesando…")
         thread {
@@ -692,6 +720,7 @@ class JarvisService : Service() {
         stopSpeaking()
         val my = gen
         speaking = true
+        lastSaid = text
         update(text.take(90))
         state = "speaking"
         val clean = text.replace(Regex("[*_#`~>|]"), " ").replace(Regex("\\s+"), " ").trim()
@@ -854,6 +883,7 @@ class JarvisService : Service() {
     private fun finishSpeak(my: Int, then: (() -> Unit)?) {
         if (my != gen) return
         speaking = false
+        lastSaidEnd = System.currentTimeMillis()
         abandonFocus()
         update("Listo, " + addr())
         if (then != null) {

@@ -265,6 +265,21 @@ class NativeBridge(private val act: Activity, private val web: WebView) {
     }
 
     @JavascriptInterface
+    fun pickMedia() {
+        (act as? WebActivity)?.nativePick("media")
+    }
+
+    @JavascriptInterface
+    fun pickFiles() {
+        (act as? WebActivity)?.nativePick("files")
+    }
+
+    @JavascriptInterface
+    fun takePhoto() {
+        (act as? WebActivity)?.nativePick("camera")
+    }
+
+    @JavascriptInterface
     fun setBubble(on: Boolean) {
         Util.prefs(act).edit().putBoolean("bubble", on).apply()
     }

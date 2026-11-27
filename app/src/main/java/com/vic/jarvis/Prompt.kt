@@ -6,7 +6,11 @@ import java.util.Date
 import java.util.Locale
 
 object Prompt {
-    fun system(c: Context, addr: String): String {
+    private const val RULES = " REGLAS DE CONVERSACIÓN: responde directamente a lo último que dijo el usuario. No repitas ni parafrasees sus palabras. No retomes temas anteriores salvo que él lo pida. Si cambia de tema, olvida el anterior por completo y concéntrate solo en el nuevo. No menciones datos personales suyos si no vienen al caso. No termines siempre con una pregunta."
+
+    fun system(c: Context, addr: String): String = base(c, addr) + RULES
+
+    private fun base(c: Context, addr: String): String {
         val now = SimpleDateFormat("EEEE d 'de' MMMM yyyy, HH:mm", Locale("es", "ES")).format(Date())
         val facts = Util.facts(c).joinToString("; ")
         val last = Util.prefs(c).getString("lastContact", "") ?: ""
