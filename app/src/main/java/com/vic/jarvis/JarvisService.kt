@@ -198,18 +198,30 @@ class JarvisService : Service() {
                     lastEvent = SystemClock.elapsedRealtime()
                     update(if (awaiting) "Dígame, " + addr() else if (wakeMode) "Escuchando: di «Jarvis» y tu orden" else "Escuchando…")
                 }
-                override fun onBeginningOfSpeech() {}
+                                var lastPartial = ""
+                var lastPartialAt = 0L
+                var earlyFired = false
+                override fun onPartialResults(p: Bundle?) {
+                    val t = p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: return
+                    if (t != lastPartial) { lastPartial = t; lastPartialAt = SystemClock.elapsedRealtime(); return }
+                    if (earlyFired || t.trim().split(Regex("\\s+")).size < 2) return
+                    if (SystemClock.elapsedRealtime() - lastPartialAt < 700L) return
+                    earlyFired = true
+                    try { r.stopListening() } catch (e: Exception) {}
+                    lastEvent = SystemClock.elapsedRealtime()
+                    errCount = 0
+                    handle(t)
+                }
                 override fun onRmsChanged(v: Float) {}
                 override fun onBufferReceived(b: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onPartialResults(p: Bundle?) {}
                 override fun onEvent(t: Int, p: Bundle?) {}
             })
             val ri = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
                 .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
-                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 600L)
             r.startListening(ri)
         } catch (e: Exception) {
             update("Error de micrófono")
